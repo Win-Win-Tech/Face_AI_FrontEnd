@@ -107,7 +107,8 @@ const WebcamCapture = () => {
 
   const fetchAttendanceDetails = async (employeeId) => {
     try {
-      const response = await axios.get(`http://127.0.0.1:8000/api/attendance-summary/`);
+      //const response = await axios.get(`http://127.0.0.1:8000/api/attendance-summary/`);
+      const response = await axios.get(`https://apigatekeeper.cloudgentechnologies.com/api/attendance-summary/`);
       const employeeData = response.data.find(record => record.employee === employeeId);
       return employeeData;
     } catch (error) {
@@ -131,7 +132,8 @@ const WebcamCapture = () => {
       formData.append('image', blob, 'face.jpg');
 
       const response = await axios.post(
-        'http://127.0.0.1:8000/api/attendance/',
+        //'http://127.0.0.1:8000/api/attendance/',
+        'https://apigatekeeper.cloudgentechnologies.com/api/attendance/',
         formData,
         { headers: { 'Content-Type': 'multipart/form-data' } }
       );
