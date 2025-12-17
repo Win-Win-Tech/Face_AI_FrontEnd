@@ -1,63 +1,182 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import Webcam from 'react-webcam';
-import axios from 'axios';
 import * as blazeface from '@tensorflow-models/blazeface';
 import '@tensorflow/tfjs';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import './WebcamCapture.css';
+import axios from 'axios';
 
 const WebcamCapture = () => {
+ 
+
+  const reverseGeocode = useCallback(async (lat, lon) => {
+    try {
+      if (lat == null || lon == null) return null;
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
+        lat
+      )}&lon=${encodeURIComponent(lon)}&accept-language=en`;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) return null;
+      const json = await res.json();
+      // Prefer display_name, otherwise try address components
+      if (json && json.display_name) return json.display_name;
+      if (json && json.address) return Object.values(json.address).join(', ');
+      return null;
+    } catch (e) {
+      // Network error or aborted — return null silently
+      // eslint-disable-next-line no-console
+      console.debug('Reverse geocode failed', e && e.message ? e.message : e);
+      return null;
+    }
+  }, []);
+
+ 
+
   const webcamRef = useRef(null);
-  const [toasts, setToasts] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [model, setModel] = useState(null);
   const [started, setStarted] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [stoppedState, setStoppedState] = useState('idle');
+  const [geolocation, setGeolocation] = useState(null);
+  const [geoError, setGeoError] = useState(null);
 
   const isProcessingRef = useRef(false);
   const modelLoadedRef = useRef(false);
   const faceDetectedRef = useRef(false);
   const lastToastTimeRef = useRef({});
+  const lastCaptureTimeRef = useRef(0);
+  const captureTimeoutRef = useRef(null);
 
-  const removeToast = useCallback((id) => {
-    setToasts(prev => prev.map(toast => 
-      toast.id === id ? { ...toast, exiting: true } : toast
-    ));
-    setTimeout(() => {
-      setToasts(prev => prev.filter(toast => toast.id !== id));
-    }, 300);
-  }, []);
+  const markAttendance = (formData) => {
+  return axios.post(
+    'https://apigatekeeper.cloudgentechnologies.com/api/attendance/',
+    // 'http://localhost:8000/api/attendance/',
+    formData,
+    {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }
+  );
+};
 
   const dismissAllToasts = useCallback(() => {
-    setToasts(prev => prev.map(toast => ({ ...toast, exiting: true })));
-    setTimeout(() => {
-      setToasts([]);
-    }, 300);
+    toast.dismiss();
   }, []);
 
-  const showToast = useCallback((type, title, message, key = null, options = {}) => {
-    if (key) {
-      const now = Date.now();
-      if (lastToastTimeRef.current[key] && now - lastToastTimeRef.current[key] < 3000) {
-        return;
+  const showToast = useCallback(
+    (type, title, message, key = null, options = {}) => {
+      if (key) {
+        const now = Date.now();
+        if (lastToastTimeRef.current[key] && now - lastToastTimeRef.current[key] < 3000) {
+          return;
+        }
+        lastToastTimeRef.current[key] = now;
       }
-      lastToastTimeRef.current[key] = now;
-    }
 
-    const id = Date.now();
-    const toast = { id, type, title, message, variant: options.variant, options };
-    setToasts(prev => [...prev, toast]);
-    
-    setTimeout(() => {
-      removeToast(id);
-    }, options.durationMs ?? 3000);
-  }, [removeToast]);
+      const toastContent = (
+        <div className="custom-toast-content">
+          {options.photo && (
+            <div className="toast-photo-frame">
+              <img
+                src={
+                  options.photo.startsWith('data:') || options.photo.startsWith('http')
+                    ? options.photo
+                    : `data:image/jpeg;base64,${options.photo}`
+                }
+                alt="Face"
+              />
+            </div>
+          )}
+          <div className="toast-text-group">
+            <div className="toast-header">
+              <strong className="toast-title">{title}</strong>
+              {options.timestamp && (
+                <span className="toast-time">
+                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+            <div className="toast-message">{message}</div>
+
+            {(options.confidence || options.location) && (
+              <div className="toast-meta">
+                {options.confidence && (
+                  <span className="meta-tag confidence">
+                    <span className="meta-icon">🎯</span> {options.confidence}%
+                  </span>
+                )}
+                {options.location && (
+                  <span className="meta-tag location">
+                    <span className="meta-icon">📍</span>{' '}
+                    {Number(options.location.latitude).toFixed(4)},{' '}
+                    {Number(options.location.longitude).toFixed(4)}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+
+      toast(toastContent, {
+        type: type === 'success' ? 'success' : type === 'error' ? 'error' : 'info',
+        autoClose: options.durationMs ?? 4000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+        className: `premium-toast-item ${type}`,
+        icon: false,
+      });
+    },
+    []
+  );
+
+  const speakText = useCallback((text) => {
+    try {
+      if (typeof window === 'undefined' || !window.speechSynthesis) return;
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'en-US';
+      utter.rate = 0.9;
+      utter.pitch = 1.2;
+      utter.volume = 1.0;
+      
+      const voices = window.speechSynthesis.getVoices();
+      const femaleVoice = voices.find(voice => voice.name.includes('Female') || voice.name.includes('woman')) || voices.find(voice => voice.name && !voice.name.includes('Male') && !voice.name.includes('man'));
+      if (femaleVoice) {
+        utter.voice = femaleVoice;
+      }
+      
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    } catch (e) {
+      // ignore speech errors
+      console.warn('Speech synthesis failed', e);
+    }
+  }, []);
 
   useEffect(() => {
     if (!started || modelLoadedRef.current) return;
     let cancelled = false;
-    
+
     const loadModel = async () => {
       try {
         const loadedModel = await blazeface.load();
@@ -69,7 +188,7 @@ const WebcamCapture = () => {
         console.error('Failed to load model', err);
       }
     };
-    
+
     loadModel();
     return () => {
       cancelled = true;
@@ -90,120 +209,282 @@ const WebcamCapture = () => {
     setFaceDetected(false);
   }, []);
 
-  const stopCameraWith = useCallback((reason) => {
-    try {
-      const stream = webcamRef.current?.video?.srcObject;
-      if (stream && stream.getTracks) {
-        stream.getTracks().forEach((t) => t.stop());
+  const stopCameraWith = useCallback(
+    (reason) => {
+      try {
+        const stream = webcamRef.current?.video?.srcObject;
+        if (stream && stream.getTracks) {
+          stream.getTracks().forEach((t) => t.stop());
+        }
+      } catch (e) {
+        console.warn('Error stopping camera tracks', e);
       }
-    } catch (e) {
-      console.warn('Error stopping camera tracks', e);
-    }
-    setCameraActive(false);
-    faceDetectedRef.current = false;
-    setFaceDetected(false);
-    setStoppedState(reason || 'idle');
-  }, []);
+      setCameraActive(false);
+      faceDetectedRef.current = false;
+      setFaceDetected(false);
+      // If the stop reason is an error, don't show the "retry" stopped screen —
+      // reset to the initial idle/start state and keep the user on the mark-attendance card.
+      if (reason === 'error') {
+        setStarted(false);
+        setStoppedState('idle');
+      } else {
+        setStoppedState(reason || 'idle');
+      }
+    },
+    []
+  );
 
-  const fetchAttendanceDetails = async (employeeId) => {
-    try {
-      //const response = await axios.get(`http://127.0.0.1:8000/api/attendance-summary/`);
-      const response = await axios.get(`https://apigatekeeper.cloudgentechnologies.com/api/attendance-summary/`);
-      const employeeData = response.data.find(record => record.employee === employeeId);
-      return employeeData;
-    } catch (error) {
-      console.error('Error fetching attendance details:', error);
-      return null;
+  const fetchGeolocation = useCallback(() => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        console.warn('Geolocation not supported by browser');
+        setGeoError('Geolocation not available');
+        resolve(null);
+        return;
+      }
+
+      (async () => {
+        let permState = null;
+        try {
+          if (navigator.permissions && navigator.permissions.query) {
+            const status = await navigator.permissions.query({ name: 'geolocation' });
+            permState = status.state;
+            console.debug('Geolocation permission state:', status.state);
+            if (status.state === 'denied') {
+              setGeoError('Permission denied');
+              setGeolocation(null);
+              resolve(null);
+              return;
+            }
+          }
+        } catch (e) {
+        
+          console.debug('Permissions API check failed', e);
+        }
+
+        const attempt = (highAccuracy, timeout) =>
+          new Promise((res) => {
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                const { latitude, longitude, accuracy } = position.coords;
+                const geoData = { latitude, longitude, accuracy, permState };
+                setGeolocation(geoData);
+                setGeoError(null);
+                // eslint-disable-next-line no-console
+                console.debug('Geolocation fetched:', geoData);
+                res({ success: true, data: geoData });
+              },
+              (error) => {
+                console.warn('Geolocation error:', error.code, error.message);
+                res({ success: false, error });
+              },
+              { enableHighAccuracy: highAccuracy, timeout, maximumAge: 0 }
+            );
+          });
+
+        let result = await attempt(true, 10000);
+        if (!result.success) {
+          if (permState === 'granted') {
+            result = await attempt(false, 20000);
+          }
+        }
+
+        if (result.success) {
+          resolve(result.data);
+          return;
+        }
+
+        const err = result.error;
+        const errMsg = err ? `(${err.code}) ${err.message}` : 'Unknown geolocation error';
+        setGeoError(errMsg);
+        setGeolocation(null);
+        resolve(null);
+      })();
+    });
+  }, []);
+  
+  // useEffect(() => {
+  //   const rawPath = location.pathname === '/' ? '/dashboard' : location.pathname;
+  //   const matched = sidebarItems.find(
+  //     (item) => rawPath === item.route || rawPath.startsWith(`${item.route}/`)
+  //   );
+  //   if (matched) {
+  //     setActiveTab(matched.id);
+  //     if (matched.id === 'attendance') {
+  //       // Auto-start camera when entering attendance tab
+  //       if (!started) {
+  //         modelLoadedRef.current = false;
+  //         setStarted(true);
+  //         setCameraActive(true);
+  //         setStoppedState('idle');
+  //         // Fetch geolocation early
+  //         fetchGeolocation();
+  //       }
+  //     } else {
+  //       if (cameraActive) {
+  //         stopCamera();
+  //       }
+  //       setStarted(false);
+  //       setStoppedState('idle');
+  //     }
+  //     return;
+  //   }
+  // }, [cameraActive, stopCamera, started, fetchGeolocation]);
+
+ const handleStart = () => {
+    if (!started) {
+      modelLoadedRef.current = false;
     }
+    dismissAllToasts();
+    setStarted(true);
+    setCameraActive(true);
   };
 
   const captureAndSend = useCallback(async () => {
     if (!webcamRef.current || isProcessingRef.current) return;
-    
+
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
 
     isProcessingRef.current = true;
     setIsProcessing(true);
-    
+
     try {
+      // Use existing geolocation or fetch if not available
+      let geoData = geolocation;
+      if (!geoData) {
+        geoData = await fetchGeolocation();
+      }
+      if (!geoData) {
+        let permState = null;
+        try {
+          if (navigator.permissions && navigator.permissions.query) {
+            const perm = await navigator.permissions.query({ name: 'geolocation' });
+            permState = perm.state;
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        const details = geoError ? ` (${geoError})` : '';
+        const permMsg = permState ? ` Permission: ${permState}.` : '';
+        showToast(
+          'error',
+          'Location Needed',
+          `Enable location on your device and browser to mark attendance${details}${permMsg} If already allowed, refresh the page or check site permissions (HTTPS/localhost required).`,
+          'attendance-location-missing',
+          { durationMs: 10000 }
+        );
+        // Set cooldown to prevent immediate retry
+        setTimeout(() => {
+          isProcessingRef.current = false;
+          setIsProcessing(false);
+          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
+        }, 10000);
+        return;
+      }
+      
       const blob = await (await fetch(imageSrc)).blob();
       const formData = new FormData();
       formData.append('image', blob, 'face.jpg');
 
-      const response = await axios.post(
-        //'http://127.0.0.1:8000/api/attendance/',
-        'https://apigatekeeper.cloudgentechnologies.com/api/attendance/',
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      );
+      // Append geolocation data if available
+      // Round to 6 decimal places to match Django DecimalField(decimal_places=6)
+      formData.append('latitude', Number(geoData.latitude).toFixed(6));
+      formData.append('longitude', Number(geoData.longitude).toFixed(6));
+      formData.append('accuracy', geoData.accuracy);
 
+      // Address is optional - backend can reverse geocode if needed
+
+      try {
+        console.debug('attendance formData entries:', Array.from(formData.entries()));
+      } catch (e) {}
+      const response = await markAttendance(formData);
       const data = response.data;
-      console.log("data", data);
-      
-      if (data.status === 'Already marked') {
-        const attendanceDetails = await fetchAttendanceDetails(data.employee);
-        const checkinTime = attendanceDetails?.checkin ? 
-          new Date(`2000-01-01 ${attendanceDetails.checkin}`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 
-          'Not marked';
-        const checkoutTime = attendanceDetails?.checkout ? 
-          new Date(`2000-01-01 ${attendanceDetails.checkout}`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 
-          'Not marked';
+      console.log('Attendance response:', data);
 
-        const message = `Hello ${data.employee}!\nYour attendance for today is already recorded:\n\nCheck-in: ${checkinTime}\nCheck-out: ${checkoutTime}`;
-        
-        showToast(
-          'info',
-          'Already Checked In/Out',
-          message,
-          'attendance-already-marked',
-          { 
-            durationMs: 8000, 
-            variant: 'hero',
-            photo: data.photo
+      // Treat any valid status/message as success, not just 'successful', 'checkin', or 'checkout'
+      if (data.status && data.message) {
+        let toastTitle = 'Attendance Marked';
+        let toastType = 'success';
+        let toastKey = 'attendance-success';
+        let toastMsg = data.message;
+
+        // Special handling for already marked
+        if (data.status === 'Already marked') {
+          toastTitle = 'Already Checked In/Out';
+          toastType = 'info';
+          toastKey = 'attendance-already-marked';
+        }
+
+        // Add geolocation info if available
+        try {
+          if (geoData) {
+            const coords = `${Number(geoData.latitude).toFixed(6)}, ${Number(geoData.longitude).toFixed(6)}`;
+            toastMsg += `\nLocation: ${coords} (±${Math.round(geoData.accuracy)}m)`;
           }
-        );
-        stopCameraWith('completed');
-        setTimeout(() => {
-          setStarted(false);
-        }, 2000);
-      } else if (data.status?.includes('successful')) {
-        const isCheckin = data.status.toLowerCase().includes('checkin');
-        showToast(
-          'success',
-          isCheckin ? 'Check-In Successful' : 'Check-Out Successful',
-          data.message,
-          'attendance-success',
-          { 
-            durationMs: 6000, 
-            variant: 'hero',
-            confidence: data.confidence,
-            timestamp: data.timestamp,
-            photo: data.photo
+          const serverAddress = data?.location?.address;
+          if (serverAddress) {
+            toastMsg += `\nAddress: ${serverAddress}`;
           }
-        );
-        stopCameraWith('completed');
-        setTimeout(() => {
-          setStarted(false);
-        }, 2000);
-      } else {
-        showToast(
-          'error',
-          'Unknown Response',
-          'Received unexpected response from server.',
-          'attendance-unknown'
-        );
-      }
-      
-      setTimeout(() => {
+        } catch (e) {}
+
         isProcessingRef.current = false;
         setIsProcessing(false);
-      }, 2000);
+
+        showToast(
+          toastType,
+          toastTitle,
+          toastMsg,
+          toastKey,
+          {
+            durationMs: toastType === 'info' ? 5000 : 6000,
+            variant: 'hero',
+            photo: data.photo,
+            confidence: data.confidence,
+            timestamp: data.timestamp,
+            location: geoData || null,
+          }
+        );
+
+        // Speak a short friendly message for accessibility if available
+        try {
+          const employeeName = data?.employee || '';
+          let speakMsg = '';
+          if (data.status === 'Already marked') {
+            speakMsg = employeeName
+              ? `your attendance for today is already recorded. Have a Good day.`
+              : 'Your attendance for today is already recorded. Have a Good day.';
+          } else {
+            speakMsg = employeeName
+              ? ` ${data.message}`
+              : data.message;
+          }
+          speakText(speakMsg);
+        } catch (e) {}
+
       
+        setTimeout(() => {
+          isProcessingRef.current = false;
+          setIsProcessing(false);
+          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
+          // Keep camera active for next attendance
+        }, 1000);
+        return;
+      } else {
+        console.log('Unknown response status:', data.status);
+        showToast('error', 'Unknown Response', 'Received unexpected response from server.', 'attendance-unknown', { durationMs: 6000 });
+        // Set cooldown to prevent immediate retry
+        setTimeout(() => {
+          isProcessingRef.current = false;
+          setIsProcessing(false);
+          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
+        }, 6000);
+      }
     } catch (error) {
       let errMsg = 'Server connection failed';
       let errTitle = 'Connection Error';
-      
+
       if (error.response?.data?.error) {
         switch (error.response.data.error) {
           case 'No face detected':
@@ -218,21 +499,38 @@ const WebcamCapture = () => {
             errTitle = 'Error';
             errMsg = error.response.data.error;
         }
+      } else if (error.response?.data) {
+        const errorData = error.response.data;
+        const errorKeys = Object.keys(errorData);
+
+        if (errorKeys.length > 0) {
+          errTitle = 'Validation Error';
+          const firstErrorKey = errorKeys[0];
+          const firstError = errorData[firstErrorKey];
+          errMsg = Array.isArray(firstError) ? firstError[0] : firstError;
+        }
       }
-      
+
       showToast('error', errTitle, errMsg, 'attendance-error', { durationMs: 10000 });
-      
+
       stopCameraWith('error');
-      isProcessingRef.current = false;
-      setIsProcessing(false);
+      setTimeout(() => {
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+        lastCaptureTimeRef.current = Date.now(); 
+      }, 10000);
     }
-  }, [showToast, stopCameraWith, fetchAttendanceDetails]);
+  }, [showToast, stopCameraWith, fetchGeolocation, geolocation, geoError]);
 
   useEffect(() => {
     if (!started || !cameraActive || !model) {
       if (faceDetectedRef.current !== false) {
         faceDetectedRef.current = false;
         setFaceDetected(false);
+      }
+      if (captureTimeoutRef.current) {
+        clearTimeout(captureTimeoutRef.current);
+        captureTimeoutRef.current = null;
       }
       return;
     }
@@ -254,14 +552,33 @@ const WebcamCapture = () => {
       try {
         const predictions = await model.estimateFaces(webcamRef.current.video, false);
         const detected = predictions && predictions.length > 0;
-        
+
         if (faceDetectedRef.current !== detected) {
           faceDetectedRef.current = detected;
           setFaceDetected(detected);
         }
-        
-        if (detected && !isProcessingRef.current) {
-          captureAndSend();
+
+        if (detected && !isProcessingRef.current && !captureTimeoutRef.current) {
+          const now = Date.now();
+          const cooldownMs = 10000; 
+          if (now - lastCaptureTimeRef.current > cooldownMs) {
+            captureTimeoutRef.current = setTimeout(async () => {
+              if (faceDetectedRef.current && !isProcessingRef.current && webcamRef.current?.video?.readyState === 4) {
+                try {
+                  await captureAndSend();
+                } catch (e) {
+                  console.error('Auto-capture error', e);
+                  lastCaptureTimeRef.current = Date.now();
+                  isProcessingRef.current = false;
+                  setIsProcessing(false);
+                }
+              }
+              captureTimeoutRef.current = null;
+            }, 2000);
+          }
+        } else if (!detected && captureTimeoutRef.current) {
+          clearTimeout(captureTimeoutRef.current);
+          captureTimeoutRef.current = null;
         }
       } catch (err) {
         console.error('Detection error', err);
@@ -272,43 +589,31 @@ const WebcamCapture = () => {
       }
     };
 
-    const interval = setInterval(detectFace, 1000);
-    
+    const interval = setInterval(detectFace, 900); // Check every 500ms for faster detection
+
     return () => {
       clearInterval(interval);
+      if (captureTimeoutRef.current) {
+        clearTimeout(captureTimeoutRef.current);
+        captureTimeoutRef.current = null;
+      }
     };
   }, [started, cameraActive, model, captureAndSend]);
 
-  const handleStart = () => {
-    if (!started) {
-      modelLoadedRef.current = false;
-    }
-    dismissAllToasts();
-    setStarted(true);
-    setCameraActive(true);
-  };
-
   const handleRetry = useCallback(() => {
     dismissAllToasts();
-    setStarted(false);
-    setCameraActive(false);
     isProcessingRef.current = false;
     setIsProcessing(false);
+    lastCaptureTimeRef.current = 0; // Reset to allow immediate retry on manual retry
     setStoppedState('idle');
   }, [dismissAllToasts]);
 
-  // handleTabChange removed — app is attendance-only now
-
-  // No routing — single page only
 
   return (
     <div className="app-shell">
-      {/* Sidebar and navigation removed — simplified to attendance-only UI */}
-
       <div className="main-wrapper">
         <main className="main-content">
-          {/* Attendance screen (only page) */}
-            <div className="attendance-screen">
+                     <div className="attendance-screen">
               {!started ? (
                 <div className="attendance-start">
                   <div className="start-card">
@@ -396,59 +701,30 @@ const WebcamCapture = () => {
                 </>
               )}
             </div>
+          
+          {/* )} */}
+
+        
         </main>
       </div>
 
-      {/* Bottom tab navigation removed */}
+      {/* Toast container */}
+      <ToastContainer
+        position="bottom-center"
+        autoClose={5000}
+        hideProgressBar
+        newestOnTop={false}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="light"
+        toastClassName="premium-toast-glass"
+        bodyClassName="premium-toast-body"
+        style={{ bottom: '100px', zIndex: 9999, padding: '0 16px' }}
+      />
 
-      <div className="toast-container">
-        {toasts.map(toast => (
-          <div
-            key={toast.id}
-            className={`toast ${toast.type} ${toast.variant || ''} ${toast.exiting ? 'toast-exit' : ''}`}
-          >
-            <div className="toast-icon">
-              {toast.type === 'success' && '✓'}
-              {toast.type === 'error' && '✕'}
-              {toast.type === 'info' && 'i'}
-            </div>
-            <div className="toast-content">
-              <div className="toast-header">
-                {toast.options?.photo && (
-                  <div className="toast-photo">
-                    <img src={toast.options.photo} alt="Employee" />
-                  </div>
-                )}
-                <div>
-                  <div className="toast-title">{toast.title}</div>
-                  <div className="toast-message">{toast.message}</div>
-                </div>
-              </div>
-              {(toast.options?.confidence || toast.options?.timestamp || toast.options?.times) && (
-                <div className="toast-details">
-                  {toast.options.confidence && (
-                    <div className="toast-confidence">
-                      Match Confidence: {(toast.options.confidence * 100).toFixed(0)}%
-                    </div>
-                  )}
-                  {toast.options.timestamp && toast.type !== 'info' && (
-                    <div className="toast-timestamp">
-                      {new Date(toast.options.timestamp).toLocaleTimeString()}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <button
-              className="toast-close"
-              onClick={() => removeToast(toast.id)}
-              aria-label="Close"
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-      </div>
     </div>
   );
 };
