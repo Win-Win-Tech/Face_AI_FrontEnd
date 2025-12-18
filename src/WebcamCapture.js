@@ -94,11 +94,11 @@ const WebcamCapture = () => {
 
       const toastContent = (
         <div className="custom-toast-content">
-          {options.photo && (
+          {options?.photo && (
             <div className="toast-photo-frame">
               <img
                 src={
-                  options.photo.startsWith('data:') || options.photo.startsWith('http')
+                  options?.photo.startsWith('data:') || options?.photo?.startsWith('http')
                     ? options.photo
                     : `data:image/jpeg;base64,${options.photo}`
                 }
@@ -448,7 +448,7 @@ const WebcamCapture = () => {
           {
             durationMs: toastType === 'info' ? 5000 : 6000,
             variant: 'hero',
-            photo: data.photo,
+            // photo: data.photo,
             confidence: data.confidence,
             timestamp: data.timestamp,
             location: geoData || null,
@@ -606,12 +606,14 @@ const WebcamCapture = () => {
   }, [started, cameraActive, model, captureAndSend]);
 
   const handleRetry = useCallback(() => {
+    // console.log('retry')
     dismissAllToasts();
     isProcessingRef.current = false;
     setIsProcessing(false);
     lastCaptureTimeRef.current = 0; // Reset to allow immediate retry on manual retry
     nextAllowedCaptureAtRef.current = 0;
     setStoppedState('idle');
+    setCameraActive(true); 
   }, [dismissAllToasts]);
 
   // On page open: require location first, then auto-start camera once allowed.
