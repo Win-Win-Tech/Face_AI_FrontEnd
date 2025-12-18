@@ -63,6 +63,7 @@ const WebcamCapture = () => {
   const lastToastTimeRef = useRef({});
   const lastCaptureTimeRef = useRef(0);
   const captureTimeoutRef = useRef(null);
+  const nextAllowedCaptureAtRef = useRef(0);
 
   const markAttendance = (formData) => {
   return axios.post(
@@ -331,11 +332,14 @@ const WebcamCapture = () => {
   //   }
   // }, [cameraActive, stopCamera, started, fetchGeolocation]);
 
- const handleStart = () => {
+ const handleStart = async () => {
+    // Explicit user action to request location permission first, then start camera.
+    dismissAllToasts();
+    const geo = await fetchGeolocation();
+    if (!geo) return;
     if (!started) {
       modelLoadedRef.current = false;
     }
-    dismissAllToasts();
     setStarted(true);
     setCameraActive(true);
   };
@@ -345,6 +349,13 @@ const WebcamCapture = () => {
 
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
+
+    // Start cooldown immediately to prevent any re-trigger while request/UX (toast/voice) happens.
+    // This fixes the "captures again right after response" race.
+    lastCaptureTimeRef.current = Date.now();
+    // Also block any further auto-captures until explicitly allowed.
+    // We'll extend this on success to 5–10s after the response.
+    nextAllowedCaptureAtRef.current = Math.max(nextAllowedCaptureAtRef.current, lastCaptureTimeRef.current);
 
     isProcessingRef.current = true;
     setIsProcessing(true);
@@ -375,12 +386,12 @@ const WebcamCapture = () => {
           'attendance-location-missing',
           { durationMs: 10000 }
         );
-        // Set cooldown to prevent immediate retry
+        // Allow retry after a short delay (keeps camera open but stops rapid loops)
+        nextAllowedCaptureAtRef.current = Date.now() + 10000;
         setTimeout(() => {
           isProcessingRef.current = false;
           setIsProcessing(false);
-          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
-        }, 10000);
+        }, 1000);
         return;
       }
       
@@ -429,9 +440,6 @@ const WebcamCapture = () => {
           }
         } catch (e) {}
 
-        isProcessingRef.current = false;
-        setIsProcessing(false);
-
         showToast(
           toastType,
           toastTitle,
@@ -463,23 +471,19 @@ const WebcamCapture = () => {
           speakText(speakMsg);
         } catch (e) {}
 
-      
-        setTimeout(() => {
-          isProcessingRef.current = false;
-          setIsProcessing(false);
-          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
-          // Keep camera active for next attendance
-        }, 1000);
+        // After an attendance response, wait 5–10s before allowing the next auto-capture.
+        // (You can tweak this value as needed.)
+        const postSuccessCooldownMs = 8000;
+        nextAllowedCaptureAtRef.current = Date.now() + postSuccessCooldownMs;
+        isProcessingRef.current = false;
+        setIsProcessing(false);
         return;
       } else {
         console.log('Unknown response status:', data.status);
         showToast('error', 'Unknown Response', 'Received unexpected response from server.', 'attendance-unknown', { durationMs: 6000 });
-        // Set cooldown to prevent immediate retry
-        setTimeout(() => {
-          isProcessingRef.current = false;
-          setIsProcessing(false);
-          lastCaptureTimeRef.current = Date.now(); // Set to current time to enforce 2-minute cooldown
-        }, 6000);
+        nextAllowedCaptureAtRef.current = Date.now() + 6000;
+        isProcessingRef.current = false;
+        setIsProcessing(false);
       }
     } catch (error) {
       let errMsg = 'Server connection failed';
@@ -514,11 +518,9 @@ const WebcamCapture = () => {
       showToast('error', errTitle, errMsg, 'attendance-error', { durationMs: 10000 });
 
       stopCameraWith('error');
-      setTimeout(() => {
-        isProcessingRef.current = false;
-        setIsProcessing(false);
-        lastCaptureTimeRef.current = Date.now(); 
-      }, 10000);
+      nextAllowedCaptureAtRef.current = Date.now() + 10000;
+      isProcessingRef.current = false;
+      setIsProcessing(false);
     }
   }, [showToast, stopCameraWith, fetchGeolocation, geolocation, geoError]);
 
@@ -560,8 +562,10 @@ const WebcamCapture = () => {
 
         if (detected && !isProcessingRef.current && !captureTimeoutRef.current) {
           const now = Date.now();
-          const cooldownMs = 10000; 
-          if (now - lastCaptureTimeRef.current > cooldownMs) {
+          const cooldownMs = 10000;
+          const allowedByTime =
+            now - lastCaptureTimeRef.current > cooldownMs && now >= nextAllowedCaptureAtRef.current;
+          if (allowedByTime) {
             captureTimeoutRef.current = setTimeout(async () => {
               if (faceDetectedRef.current && !isProcessingRef.current && webcamRef.current?.video?.readyState === 4) {
                 try {
@@ -569,6 +573,7 @@ const WebcamCapture = () => {
                 } catch (e) {
                   console.error('Auto-capture error', e);
                   lastCaptureTimeRef.current = Date.now();
+                  nextAllowedCaptureAtRef.current = Date.now() + 6000;
                   isProcessingRef.current = false;
                   setIsProcessing(false);
                 }
@@ -605,8 +610,29 @@ const WebcamCapture = () => {
     isProcessingRef.current = false;
     setIsProcessing(false);
     lastCaptureTimeRef.current = 0; // Reset to allow immediate retry on manual retry
+    nextAllowedCaptureAtRef.current = 0;
     setStoppedState('idle');
   }, [dismissAllToasts]);
+
+  // On page open: require location first, then auto-start camera once allowed.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // If already started (manual retry flow), don't interfere.
+      if (started) return;
+      const geo = await fetchGeolocation();
+      if (cancelled) return;
+      if (geo) {
+        // Location allowed: auto-start camera/workflow.
+        modelLoadedRef.current = false;
+        setStarted(true);
+        setCameraActive(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchGeolocation, started]);
 
 
   return (
@@ -620,12 +646,12 @@ const WebcamCapture = () => {
                     <div className="start-icon-wrapper">
                       <div className="start-icon">📸</div>
                     </div>
-                    <h2 className="start-title">Ready to Mark Attendance</h2>
+                    <h2 className="start-title">Enable Location to Continue</h2>
                     <p className="start-description">
-                      Activate your camera to launch the real-time face recognition workflow.
+                      We first need your location permission. After that, we’ll open the camera and auto-mark attendance when your face is detected.
                     </p>
                     <button className="start-attendance-button" onClick={handleStart}>
-                      Mark my attendance
+                      Allow Location & Start
                     </button>
                   </div>
                 </div>
