@@ -8,7 +8,7 @@ import './WebcamCapture.css';
 import axios from 'axios';
 
 const WebcamCapture = () => {
- 
+
 
   const reverseGeocode = useCallback(async (lat, lon) => {
     try {
@@ -43,7 +43,7 @@ const WebcamCapture = () => {
     }
   }, []);
 
- 
+
 
   const webcamRef = useRef(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -66,17 +66,17 @@ const WebcamCapture = () => {
   const nextAllowedCaptureAtRef = useRef(0);
 
   const markAttendance = (formData) => {
-  return axios.post(
-    'https://apigatekeeper.cloudgentechnologies.com/api/attendance/',
-    // 'http://localhost:8000/api/attendance/',
-    formData,
-    {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    }
-  );
-};
+    return axios.post(
+      'https://apigatekeeper.cloudgentechnologies.com/api/attendance/',
+      // 'http://localhost:8000/api/attendance/',
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+  };
 
   const dismissAllToasts = useCallback(() => {
     toast.dismiss();
@@ -159,13 +159,13 @@ const WebcamCapture = () => {
       utter.rate = 0.9;
       utter.pitch = 1.2;
       utter.volume = 1.0;
-      
+
       const voices = window.speechSynthesis.getVoices();
       const femaleVoice = voices.find(voice => voice.name.includes('Female') || voice.name.includes('woman')) || voices.find(voice => voice.name && !voice.name.includes('Male') && !voice.name.includes('man'));
       if (femaleVoice) {
         utter.voice = femaleVoice;
       }
-      
+
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utter);
     } catch (e) {
@@ -259,7 +259,7 @@ const WebcamCapture = () => {
             }
           }
         } catch (e) {
-        
+
           console.debug('Permissions API check failed', e);
         }
 
@@ -303,7 +303,7 @@ const WebcamCapture = () => {
       })();
     });
   }, []);
-  
+
   // useEffect(() => {
   //   const rawPath = location.pathname === '/' ? '/dashboard' : location.pathname;
   //   const matched = sidebarItems.find(
@@ -332,7 +332,7 @@ const WebcamCapture = () => {
   //   }
   // }, [cameraActive, stopCamera, started, fetchGeolocation]);
 
- const handleStart = async () => {
+  const handleStart = async () => {
     // Explicit user action to request location permission first, then start camera.
     dismissAllToasts();
     const geo = await fetchGeolocation();
@@ -394,7 +394,7 @@ const WebcamCapture = () => {
         }, 1000);
         return;
       }
-      
+
       const blob = await (await fetch(imageSrc)).blob();
       const formData = new FormData();
       formData.append('image', blob, 'face.jpg');
@@ -409,7 +409,7 @@ const WebcamCapture = () => {
 
       try {
         console.debug('attendance formData entries:', Array.from(formData.entries()));
-      } catch (e) {}
+      } catch (e) { }
       const response = await markAttendance(formData);
       const data = response.data;
       console.log('Attendance response:', data);
@@ -438,7 +438,7 @@ const WebcamCapture = () => {
           if (serverAddress) {
             toastMsg += `\nAddress: ${serverAddress}`;
           }
-        } catch (e) {}
+        } catch (e) { }
 
         showToast(
           toastType,
@@ -469,7 +469,7 @@ const WebcamCapture = () => {
               : data.message;
           }
           speakText(speakMsg);
-        } catch (e) {}
+        } catch (e) { }
 
         // After an attendance response, wait 5–10s before allowing the next auto-capture.
         // (You can tweak this value as needed.)
@@ -569,6 +569,16 @@ const WebcamCapture = () => {
             captureTimeoutRef.current = setTimeout(async () => {
               if (faceDetectedRef.current && !isProcessingRef.current && webcamRef.current?.video?.readyState === 4) {
                 try {
+                  // Double-check if face is still present right before capturing
+                  const predictions = await model.estimateFaces(webcamRef.current.video, false);
+                  if (!predictions || predictions.length === 0) {
+                    console.log('Face lost before capture, aborting.');
+                    faceDetectedRef.current = false;
+                    setFaceDetected(false);
+                    captureTimeoutRef.current = null;
+                    return;
+                  }
+
                   await captureAndSend();
                 } catch (e) {
                   console.error('Auto-capture error', e);
@@ -613,7 +623,7 @@ const WebcamCapture = () => {
     lastCaptureTimeRef.current = 0; // Reset to allow immediate retry on manual retry
     nextAllowedCaptureAtRef.current = 0;
     setStoppedState('idle');
-    setCameraActive(true); 
+    setCameraActive(true);
   }, [dismissAllToasts]);
 
   // On page open: require location first, then auto-start camera once allowed.
@@ -641,98 +651,98 @@ const WebcamCapture = () => {
     <div className="app-shell">
       <div className="main-wrapper">
         <main className="main-content">
-                     <div className="attendance-screen">
-              {!started ? (
-                <div className="attendance-start">
-                  <div className="start-card">
-                    <div className="start-icon-wrapper">
-                      <div className="start-icon">📸</div>
-                    </div>
-                    <h2 className="start-title">Enable Location to Continue</h2>
-                    <p className="start-description">
-                      We first need your location permission. After that, we’ll open the camera and auto-mark attendance when your face is detected.
-                    </p>
-                    <button className="start-attendance-button" onClick={handleStart}>
-                      Allow Location & Start
-                    </button>
+          <div className="attendance-screen">
+            {!started ? (
+              <div className="attendance-start">
+                <div className="start-card">
+                  <div className="start-icon-wrapper">
+                    <div className="start-icon">📸</div>
                   </div>
+                  <h2 className="start-title">Enable Location to Continue</h2>
+                  <p className="start-description">
+                    We first need your location permission. After that, we’ll open the camera and auto-mark attendance when your face is detected.
+                  </p>
+                  <button className="start-attendance-button" onClick={handleStart}>
+                    Allow Location & Start
+                  </button>
                 </div>
-              ) : (
-                <>
-                  {cameraActive ? (
-                    <div className="camera-container">
-                      <Webcam
-                        audio={false}
-                        ref={webcamRef}
-                        screenshotFormat="image/jpeg"
-                        className="camera-feed"
-                        videoConstraints={{
-                          facingMode: 'user',
-                          width: { min: 320, ideal: 1920, max: 2560 },
-                          height: { min: 240, ideal: 1080, max: 1440 },
-                          aspectRatio: 16/9
-                        }}
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          maxHeight: '100vh',
-                          objectFit: 'contain',
-                          backgroundColor: '#000'
-                        }}
-                      />
+              </div>
+            ) : (
+              <>
+                {cameraActive ? (
+                  <div className="camera-container">
+                    <Webcam
+                      audio={false}
+                      ref={webcamRef}
+                      screenshotFormat="image/jpeg"
+                      className="camera-feed"
+                      videoConstraints={{
+                        facingMode: 'user',
+                        width: { min: 320, ideal: 1920, max: 2560 },
+                        height: { min: 240, ideal: 1080, max: 1440 },
+                        aspectRatio: 16 / 9
+                      }}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        maxHeight: '100vh',
+                        objectFit: 'contain',
+                        backgroundColor: '#000'
+                      }}
+                    />
 
-                      {model && (
-                        <div className="detection-frame">
-                          <div className="scanning-line"></div>
-                        </div>
-                      )}
-
-                      {isProcessing && (
-                        <div className="processing-overlay">
-                          <div className="processing-content">
-                            <div className="spinner"></div>
-                            <div className="processing-text">Processing...</div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="camera-stopped">
-                      <div className="stopped-card">
-                        <div className="stopped-icon">{stoppedState === 'error' ? '⚠️' : '✓'}</div>
-                        <h2 className="stopped-title">
-                          {stoppedState === 'error' ? 'Let\'s Try Again' : stoppedState === 'cancelled' ? 'Camera Stopped' : stoppedState === 'retry' ? 'Ready to Continue' : 'Capture Complete'}
-                        </h2>
-                        <p className="stopped-description">
-                          {stoppedState === 'error' 
-                            ? 'We could not confirm your face. Ensure good lighting and keep your face centered.'
-                            : stoppedState === 'cancelled'
-                              ? 'You can resume anytime. Click below to try again.'
-                              : stoppedState === 'retry'
-                                ? 'Click below to resume your attendance capture.'
-                                : 'Attendance has been submitted. You can retry to capture again if needed.'}
-                        </p>
-                        <button className="retry-button" onClick={handleRetry}>
-                          Retry Attendance
-                        </button>
+                    {model && (
+                      <div className="detection-frame">
+                        <div className="scanning-line"></div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {cameraActive && !isProcessing && (
-                    <div className="bottom-controls">
-                      <button className="control-button" onClick={() => stopCameraWith('cancelled')}>
-                        Cancel
+                    {isProcessing && (
+                      <div className="processing-overlay">
+                        <div className="processing-content">
+                          <div className="spinner"></div>
+                          <div className="processing-text">Processing...</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="camera-stopped">
+                    <div className="stopped-card">
+                      <div className="stopped-icon">{stoppedState === 'error' ? '⚠️' : '✓'}</div>
+                      <h2 className="stopped-title">
+                        {stoppedState === 'error' ? 'Let\'s Try Again' : stoppedState === 'cancelled' ? 'Camera Stopped' : stoppedState === 'retry' ? 'Ready to Continue' : 'Capture Complete'}
+                      </h2>
+                      <p className="stopped-description">
+                        {stoppedState === 'error'
+                          ? 'We could not confirm your face. Ensure good lighting and keep your face centered.'
+                          : stoppedState === 'cancelled'
+                            ? 'You can resume anytime. Click below to try again.'
+                            : stoppedState === 'retry'
+                              ? 'Click below to resume your attendance capture.'
+                              : 'Attendance has been submitted. You can retry to capture again if needed.'}
+                      </p>
+                      <button className="retry-button" onClick={handleRetry}>
+                        Retry Attendance
                       </button>
                     </div>
-                  )}
-                </>
-              )}
-            </div>
-          
+                  </div>
+                )}
+
+                {cameraActive && !isProcessing && (
+                  <div className="bottom-controls">
+                    <button className="control-button" onClick={() => stopCameraWith('cancelled')}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {/* )} */}
 
-        
+
         </main>
       </div>
 
