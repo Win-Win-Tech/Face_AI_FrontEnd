@@ -517,7 +517,8 @@ const WebcamCapture = () => {
 
       showToast('error', errTitle, errMsg, 'attendance-error', { durationMs: 10000 });
 
-      stopCameraWith('error');
+      // Don't stop the camera on error, just reset processing state so they can try again.
+      // stopCameraWith('error'); 
       nextAllowedCaptureAtRef.current = Date.now() + 10000;
       isProcessingRef.current = false;
       setIsProcessing(false);
