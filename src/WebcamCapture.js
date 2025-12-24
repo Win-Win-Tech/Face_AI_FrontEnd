@@ -57,6 +57,10 @@ const WebcamCapture = () => {
   const [geolocation, setGeolocation] = useState(null);
   const [geoError, setGeoError] = useState(null);
 
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [flashActive, setFlashActive] = useState(false);
+  const [faceCoords, setFaceCoords] = useState(null);
+
   const isProcessingRef = useRef(false);
   const modelLoadedRef = useRef(false);
   const faceDetectedRef = useRef(false);
@@ -146,6 +150,7 @@ const WebcamCapture = () => {
         draggable: true,
         className: `premium-toast-item ${type}`,
         icon: false,
+        onClose: options.onClose, // Pass onClose callback
       });
     },
     []
@@ -345,20 +350,33 @@ const WebcamCapture = () => {
   };
 
   const captureAndSend = useCallback(async () => {
-    if (!webcamRef.current || isProcessingRef.current) return;
+    if (!webcamRef.current || isProcessingRef.current || capturedImage) return;
+
+    // Immediate lock to prevent overlapping calls
+    isProcessingRef.current = true;
+    setIsProcessing(true);
 
     const imageSrc = webcamRef.current.getScreenshot();
-    if (!imageSrc) return;
+    if (!imageSrc) {
+      isProcessingRef.current = false;
+      setIsProcessing(false);
+      return;
+    }
 
     // Start cooldown immediately to prevent any re-trigger while request/UX (toast/voice) happens.
     // This fixes the "captures again right after response" race.
     lastCaptureTimeRef.current = Date.now();
     // Also block any further auto-captures until explicitly allowed.
-    // We'll extend this on success to 5–10s after the response.
+    // We'll extend this on success to 3-5s after the response.
     nextAllowedCaptureAtRef.current = Math.max(nextAllowedCaptureAtRef.current, lastCaptureTimeRef.current);
 
     isProcessingRef.current = true;
     setIsProcessing(true);
+
+    // UI EFFECTS: Flash & Freeze
+    setFlashActive(true);
+    setTimeout(() => setFlashActive(false), 400); // Reset flash after animation
+    setCapturedImage(imageSrc); // FREEZE THE FRAME
 
     try {
       // Use existing geolocation or fetch if not available
@@ -384,7 +402,10 @@ const WebcamCapture = () => {
           'Location Needed',
           `Enable location on your device and browser to mark attendance${details}${permMsg} If already allowed, refresh the page or check site permissions (HTTPS/localhost required).`,
           'attendance-location-missing',
-          { durationMs: 10000 }
+          {
+            durationMs: 5000, // Reduced from 10000 for faster auto-close
+            onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+          }
         );
         // Allow retry after a short delay (keeps camera open but stops rapid loops)
         nextAllowedCaptureAtRef.current = Date.now() + 10000;
@@ -446,12 +467,13 @@ const WebcamCapture = () => {
           toastMsg,
           toastKey,
           {
-            durationMs: toastType === 'info' ? 5000 : 6000,
+            durationMs: 4000, // Reduced for better UX
             variant: 'hero',
             // photo: data.photo,
             confidence: data.confidence,
             timestamp: data.timestamp,
             location: geoData || null,
+            onClose: () => setCapturedImage(null) // Unfreeze when toast closes
           }
         );
 
@@ -471,16 +493,19 @@ const WebcamCapture = () => {
           speakText(speakMsg);
         } catch (e) { }
 
-        // After an attendance response, wait 5–10s before allowing the next auto-capture.
+        // After an attendance response, wait 3-5s before allowing the next auto-capture.
         // (You can tweak this value as needed.)
-        const postSuccessCooldownMs = 8000;
+        const postSuccessCooldownMs = 3000;
         nextAllowedCaptureAtRef.current = Date.now() + postSuccessCooldownMs;
         isProcessingRef.current = false;
         setIsProcessing(false);
         return;
       } else {
         console.log('Unknown response status:', data.status);
-        showToast('error', 'Unknown Response', 'Received unexpected response from server.', 'attendance-unknown', { durationMs: 6000 });
+        showToast('error', 'Unknown Response', 'Received unexpected response from server.', 'attendance-unknown', {
+          durationMs: 6000,
+          onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+        });
         nextAllowedCaptureAtRef.current = Date.now() + 6000;
         isProcessingRef.current = false;
         setIsProcessing(false);
@@ -515,11 +540,14 @@ const WebcamCapture = () => {
         }
       }
 
-      showToast('error', errTitle, errMsg, 'attendance-error', { durationMs: 10000 });
+      showToast('error', errTitle, errMsg, 'attendance-error', {
+        durationMs: 5000, // Reduced from 10000
+        onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+      });
 
       // Don't stop the camera on error, just reset processing state so they can try again.
       // stopCameraWith('error'); 
-      nextAllowedCaptureAtRef.current = Date.now() + 10000;
+      nextAllowedCaptureAtRef.current = Date.now() + 5000;
       isProcessingRef.current = false;
       setIsProcessing(false);
     }
@@ -543,11 +571,17 @@ const WebcamCapture = () => {
         !webcamRef.current ||
         !webcamRef.current.video ||
         webcamRef.current.video.readyState !== 4 ||
-        isProcessingRef.current
+        isProcessingRef.current ||
+        capturedImage
       ) {
         if (faceDetectedRef.current !== false) {
           faceDetectedRef.current = false;
           setFaceDetected(false);
+        }
+        setFaceCoords(null);
+        if (captureTimeoutRef.current) {
+          clearTimeout(captureTimeoutRef.current);
+          captureTimeoutRef.current = null;
         }
         return;
       }
@@ -559,6 +593,44 @@ const WebcamCapture = () => {
         if (faceDetectedRef.current !== detected) {
           faceDetectedRef.current = detected;
           setFaceDetected(detected);
+        }
+
+        if (detected) {
+          const prediction = predictions[0];
+          const start = prediction.topLeft;
+          const end = prediction.bottomRight;
+          const size = [end[0] - start[0], end[1] - start[1]];
+
+          // Map coordinates to video container size (Handling object-fit: cover)
+          const video = webcamRef.current.video;
+          const videoWidth = video.videoWidth;
+          const videoHeight = video.videoHeight;
+          const displayWidth = video.clientWidth;
+          const displayHeight = video.clientHeight;
+
+          const videoAspect = videoWidth / videoHeight;
+          const displayAspect = displayWidth / displayHeight;
+
+          let scale, offsetX = 0, offsetY = 0;
+
+          if (displayAspect > videoAspect) {
+            // Display is wider than video (cropped top/bottom)
+            scale = displayWidth / videoWidth;
+            offsetY = (videoHeight * scale - displayHeight) / 2;
+          } else {
+            // Display is taller than video (cropped sides)
+            scale = displayHeight / videoHeight;
+            offsetX = (videoWidth * scale - displayWidth) / 2;
+          }
+
+          setFaceCoords({
+            left: start[0] * scale - offsetX - 20,
+            top: start[1] * scale - offsetY - 30,
+            width: size[0] * scale + 40,
+            height: size[1] * scale + 60
+          });
+        } else {
+          setFaceCoords(null);
         }
 
         if (detected && !isProcessingRef.current && !captureTimeoutRef.current) {
@@ -587,10 +659,11 @@ const WebcamCapture = () => {
                   nextAllowedCaptureAtRef.current = Date.now() + 6000;
                   isProcessingRef.current = false;
                   setIsProcessing(false);
+                  setCapturedImage(null);
                 }
               }
               captureTimeoutRef.current = null;
-            }, 2000);
+            }, 1500); // 1.5s delay for user to settle in frame
           }
         } else if (!detected && captureTimeoutRef.current) {
           clearTimeout(captureTimeoutRef.current);
@@ -605,7 +678,7 @@ const WebcamCapture = () => {
       }
     };
 
-    const interval = setInterval(detectFace, 900); // Check every 500ms for faster detection
+    const interval = setInterval(detectFace, 200); // Check every 200ms for instant detection
 
     return () => {
       clearInterval(interval);
@@ -614,13 +687,14 @@ const WebcamCapture = () => {
         captureTimeoutRef.current = null;
       }
     };
-  }, [started, cameraActive, model, captureAndSend]);
+  }, [started, cameraActive, model, captureAndSend, capturedImage]);
 
   const handleRetry = useCallback(() => {
     // console.log('retry')
     dismissAllToasts();
     isProcessingRef.current = false;
     setIsProcessing(false);
+    setCapturedImage(null);
     lastCaptureTimeRef.current = 0; // Reset to allow immediate retry on manual retry
     nextAllowedCaptureAtRef.current = 0;
     setStoppedState('idle');
@@ -683,27 +757,56 @@ const WebcamCapture = () => {
                         height: { min: 240, ideal: 1080, max: 1440 },
                         aspectRatio: 16 / 9
                       }}
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        maxHeight: '100vh',
-                        objectFit: 'contain',
-                        backgroundColor: '#000'
-                      }}
                     />
 
-                    {model && (
-                      <div className="detection-frame">
-                        <div className="scanning-line"></div>
+                    {/* Kiosk Header */}
+                    <div className="kiosk-header">
+                      <div className="kiosk-logo">👤</div>
+                      <div className="kiosk-status">
+                        <div className="status-text">Face Attendance</div>
+                        <div className="status-indicator">
+                          <div className="indicator-dot"></div>
+                          <span>System Live</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dynamic HUD Frame */}
+                    {faceCoords && (
+                      <div
+                        className={`hud-frame ${captureTimeoutRef.current ? 'locked' : ''}`}
+                        style={{
+                          left: faceCoords.left,
+                          top: faceCoords.top,
+                          width: faceCoords.width,
+                          height: faceCoords.height
+                        }}
+                      >
+                        <div className="hud-label">
+                          {captureTimeoutRef.current ? 'Locking...' : 'Scanning Face'}
+                        </div>
                       </div>
                     )}
 
-                    {isProcessing && (
-                      <div className="processing-overlay">
-                        <div className="processing-content">
-                          <div className="spinner"></div>
-                          <div className="processing-text">Processing...</div>
+                    {/* Flash Effect */}
+                    {flashActive && <div className="flash-overlay"></div>}
+
+                    {/* Frozen Image Overlay (Simulates Freeze) */}
+                    {capturedImage && (
+                      <div className="frozen-overlay" style={{ backgroundImage: `url(${capturedImage})` }}>
+                        <div className="verifying-badge">
+                          <div className="mini-spinner"></div>
+                          <span>Verifying Biometrics...</span>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Floating Cancel Button */}
+                    {cameraActive && !isProcessing && (
+                      <div className="bottom-controls">
+                        <button className="control-button" onClick={() => stopCameraWith('cancelled')}>
+                          Cancel
+                        </button>
                       </div>
                     )}
                   </div>
@@ -729,21 +832,9 @@ const WebcamCapture = () => {
                     </div>
                   </div>
                 )}
-
-                {cameraActive && !isProcessing && (
-                  <div className="bottom-controls">
-                    <button className="control-button" onClick={() => stopCameraWith('cancelled')}>
-                      Cancel
-                    </button>
-                  </div>
-                )}
               </>
             )}
           </div>
-
-          {/* )} */}
-
-
         </main>
       </div>
 
