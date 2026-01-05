@@ -363,12 +363,7 @@ const WebcamCapture = () => {
       return;
     }
 
-    // Start cooldown immediately to prevent any re-trigger while request/UX (toast/voice) happens.
-    // This fixes the "captures again right after response" race.
     lastCaptureTimeRef.current = Date.now();
-    // Also block any further auto-captures until explicitly allowed.
-    // We'll extend this on success to 3-5s after the response.
-    nextAllowedCaptureAtRef.current = Math.max(nextAllowedCaptureAtRef.current, lastCaptureTimeRef.current);
 
     isProcessingRef.current = true;
     setIsProcessing(true);
@@ -403,12 +398,10 @@ const WebcamCapture = () => {
           `Enable location on your device and browser to mark attendance${details}${permMsg} If already allowed, refresh the page or check site permissions (HTTPS/localhost required).`,
           'attendance-location-missing',
           {
-            durationMs: 5000, // Reduced from 10000 for faster auto-close
-            onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+            durationMs: 5000,
+            onClose: () => setCapturedImage(null)
           }
         );
-        // Allow retry after a short delay (keeps camera open but stops rapid loops)
-        nextAllowedCaptureAtRef.current = Date.now() + 10000;
         setTimeout(() => {
           isProcessingRef.current = false;
           setIsProcessing(false);
@@ -467,13 +460,12 @@ const WebcamCapture = () => {
           toastMsg,
           toastKey,
           {
-            durationMs: 4000, // Reduced for better UX
+            durationMs: 4000,
             variant: 'hero',
-            // photo: data.photo,
             confidence: data.confidence,
             timestamp: data.timestamp,
             location: geoData || null,
-            onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+            onClose: () => setCapturedImage(null)
           }
         );
 
@@ -493,10 +485,6 @@ const WebcamCapture = () => {
           speakText(speakMsg);
         } catch (e) { }
 
-        // After an attendance response, wait 3-5s before allowing the next auto-capture.
-        // (You can tweak this value as needed.)
-        const postSuccessCooldownMs = 3000;
-        nextAllowedCaptureAtRef.current = Date.now() + postSuccessCooldownMs;
         isProcessingRef.current = false;
         setIsProcessing(false);
         return;
@@ -513,6 +501,22 @@ const WebcamCapture = () => {
     } catch (error) {
       let errMsg = 'Server connection failed';
       let errTitle = 'Connection Error';
+
+      // Handle cooldown error (HTTP 429)
+      if (error.response?.status === 429 && error.response?.data) {
+        errTitle = 'Please Wait';
+        errMsg = error.response.data.message || 'Please wait before marking attendance again.';
+        const cooldownSeconds = error.response.data.seconds_remaining || 300;
+        
+        showToast('info', errTitle, `${errMsg}\nNext attempt available in ${cooldownSeconds}s`, 'attendance-cooldown', {
+          durationMs: (cooldownSeconds + 1) * 1000,
+          onClose: () => setCapturedImage(null)
+        });
+
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+        return;
+      }
 
       if (error.response?.data?.error) {
         switch (error.response.data.error) {
@@ -541,13 +545,11 @@ const WebcamCapture = () => {
       }
 
       showToast('error', errTitle, errMsg, 'attendance-error', {
-        durationMs: 5000, // Reduced from 10000
-        onClose: () => setCapturedImage(null) // Unfreeze when toast closes
+        durationMs: 5000,
+        onClose: () => setCapturedImage(null)
       });
 
       // Don't stop the camera on error, just reset processing state so they can try again.
-      // stopCameraWith('error'); 
-      nextAllowedCaptureAtRef.current = Date.now() + 5000;
       isProcessingRef.current = false;
       setIsProcessing(false);
     }
@@ -635,36 +637,31 @@ const WebcamCapture = () => {
 
         if (detected && !isProcessingRef.current && !captureTimeoutRef.current) {
           const now = Date.now();
-          const cooldownMs = 10000;
-          const allowedByTime =
-            now - lastCaptureTimeRef.current > cooldownMs && now >= nextAllowedCaptureAtRef.current;
-          if (allowedByTime) {
-            captureTimeoutRef.current = setTimeout(async () => {
-              if (faceDetectedRef.current && !isProcessingRef.current && webcamRef.current?.video?.readyState === 4) {
-                try {
-                  // Double-check if face is still present right before capturing
-                  const predictions = await model.estimateFaces(webcamRef.current.video, false);
-                  if (!predictions || predictions.length === 0) {
-                    console.log('Face lost before capture, aborting.');
-                    faceDetectedRef.current = false;
-                    setFaceDetected(false);
-                    captureTimeoutRef.current = null;
-                    return;
-                  }
+          
+          captureTimeoutRef.current = setTimeout(async () => {
+            if (faceDetectedRef.current && !isProcessingRef.current && webcamRef.current?.video?.readyState === 4) {
+              try {
+                // Double-check if face is still present right before capturing
+                const predictions = await model.estimateFaces(webcamRef.current.video, false);
+                if (!predictions || predictions.length === 0) {
+                  console.log('Face lost before capture, aborting.');
+                  faceDetectedRef.current = false;
+                  setFaceDetected(false);
+                  captureTimeoutRef.current = null;
+                  return;
+                }
 
-                  await captureAndSend();
-                } catch (e) {
-                  console.error('Auto-capture error', e);
-                  lastCaptureTimeRef.current = Date.now();
-                  nextAllowedCaptureAtRef.current = Date.now() + 6000;
-                  isProcessingRef.current = false;
-                  setIsProcessing(false);
-                  setCapturedImage(null);
+                await captureAndSend();
+              } catch (e) {
+                console.error('Auto-capture error', e);
+                lastCaptureTimeRef.current = Date.now();
+                isProcessingRef.current = false;
+                setIsProcessing(false);
+                setCapturedImage(null);
                 }
               }
               captureTimeoutRef.current = null;
             }, 1500); // 1.5s delay for user to settle in frame
-          }
         } else if (!detected && captureTimeoutRef.current) {
           clearTimeout(captureTimeoutRef.current);
           captureTimeoutRef.current = null;
