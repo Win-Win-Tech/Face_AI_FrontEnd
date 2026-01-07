@@ -86,6 +86,28 @@ const WebcamCapture = () => {
     toast.dismiss();
   }, []);
 
+   const speakText = useCallback((text) => {
+    try {
+      if (typeof window === 'undefined' || !window.speechSynthesis) return;
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'en-US';
+      utter.rate = 0.9;
+      utter.pitch = 1.2;
+      utter.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const femaleVoice = voices.find(voice => voice.name.includes('Female') || voice.name.includes('woman')) || voices.find(voice => voice.name && !voice.name.includes('Male') && !voice.name.includes('man'));
+      if (femaleVoice) {
+        utter.voice = femaleVoice;
+      }
+
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    } catch (e) {
+      console.warn('Speech synthesis failed', e);
+    }
+  }, []);
+
   const showToast = useCallback(
     (type, title, message, key = null, options = {}) => {
       if (key) {
@@ -123,11 +145,11 @@ const WebcamCapture = () => {
 
             {(options.confidence || options.location) && (
               <div className="toast-meta">
-                {options.confidence && (
+                {/* {options.confidence && (
                   <span className="meta-tag confidence">
                     <span className="meta-icon">🎯</span> {options.confidence}%
                   </span>
-                )}
+                )} */}
                 {options.location && (
                   <span className="meta-tag location">
                     <span className="meta-icon">📍</span>{' '}
@@ -141,9 +163,13 @@ const WebcamCapture = () => {
         </div>
       );
 
+      const textToSpeak = `${message}`;
+      const estimatedWordCount = textToSpeak.length / 5;
+      const estimatedSpeakDurationMs = (estimatedWordCount / 2.5) * 1000 + 500; // 500ms buffer
+
       toast(toastContent, {
         type: type === 'success' ? 'success' : type === 'error' ? 'error' : 'info',
-        autoClose: options.durationMs ?? 4000,
+        autoClose: options.durationMs ?? estimatedSpeakDurationMs,
         hideProgressBar: true,
         closeOnClick: true,
         pauseOnHover: true,
@@ -152,32 +178,15 @@ const WebcamCapture = () => {
         icon: false,
         onClose: options.onClose, // Pass onClose callback
       });
+
+      // Speak the toast message for accessibility
+      const speechMessage = ` ${message}`;
+      speakText(speechMessage);
     },
-    []
+    [speakText]
   );
 
-  const speakText = useCallback((text) => {
-    try {
-      if (typeof window === 'undefined' || !window.speechSynthesis) return;
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'en-US';
-      utter.rate = 0.9;
-      utter.pitch = 1.2;
-      utter.volume = 1.0;
-
-      const voices = window.speechSynthesis.getVoices();
-      const femaleVoice = voices.find(voice => voice.name.includes('Female') || voice.name.includes('woman')) || voices.find(voice => voice.name && !voice.name.includes('Male') && !voice.name.includes('man'));
-      if (femaleVoice) {
-        utter.voice = femaleVoice;
-      }
-
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utter);
-    } catch (e) {
-      // ignore speech errors
-      console.warn('Speech synthesis failed', e);
-    }
-  }, []);
+ 
 
   useEffect(() => {
     if (!started || modelLoadedRef.current) return;
@@ -426,7 +435,6 @@ const WebcamCapture = () => {
       } catch (e) { }
       const response = await markAttendance(formData);
       const data = response.data;
-      console.log('Attendance response:', data);
 
       // Treat any valid status/message as success, not just 'successful', 'checkin', or 'checkout'
       if (data.status && data.message) {
@@ -460,7 +468,7 @@ const WebcamCapture = () => {
           toastMsg,
           toastKey,
           {
-            durationMs: 4000,
+            durationMs: 4500,
             variant: 'hero',
             confidence: data.confidence,
             timestamp: data.timestamp,
@@ -491,7 +499,7 @@ const WebcamCapture = () => {
       } else {
         console.log('Unknown response status:', data.status);
         showToast('error', 'Unknown Response', 'Received unexpected response from server.', 'attendance-unknown', {
-          durationMs: 6000,
+          durationMs: 5000,
           onClose: () => setCapturedImage(null) // Unfreeze when toast closes
         });
         nextAllowedCaptureAtRef.current = Date.now() + 6000;
@@ -508,8 +516,8 @@ const WebcamCapture = () => {
         errMsg = error.response.data.message || 'Please wait before marking attendance again.';
         const cooldownSeconds = error.response.data.seconds_remaining || 300;
         
-        showToast('info', errTitle, `${errMsg}\nNext attempt available in ${cooldownSeconds}s`, 'attendance-cooldown', {
-          durationMs: (cooldownSeconds + 1) * 1000,
+        showToast('info', errTitle, `${errMsg}. Try after 5 minutes`, 'attendance-cooldown', {
+          durationMs: 5000,
           onClose: () => setCapturedImage(null)
         });
 
