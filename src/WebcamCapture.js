@@ -538,7 +538,7 @@ const WebcamCapture = () => {
             break;
           default:
             errTitle = 'Error';
-            errMsg = error.response.data.error;
+            errMsg = error.response.data.message || error.response.data.error;
         }
       } else if (error.response?.data) {
         const errorData = error.response.data;
